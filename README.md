@@ -22,10 +22,10 @@ This script requires following arguments (necessary to run):
 - Cloudinary API Secret
 - GCS Bucket name
 
-Optional authentication arguments:
+authentication arguments:
 
-- GCS credentials path (service account JSON). If omitted, Application Default Credentials are used.
-- GCS project ID (optional when included in the credentials file)
+- GCS credentials path (service account JSON). Please make sure you are giving "Storage Admin Access for the bucket"
+- GCS project ID (when included in the credentials file)
 
 For example,
 
