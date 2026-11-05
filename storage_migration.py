@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import re
 from tqdm import tqdm
@@ -8,6 +9,66 @@ import cloudinary.uploader
 import cloudinary.api
 from google.cloud import storage
 import concurrent.futures
+
+# Extensions missing from the stdlib map on older Python versions.
+# Used only when the origin response has no specific Content-Type.
+_EXTRA_CONTENT_TYPES = {
+    ".avif": "image/avif",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".jfif": "image/jpeg",
+    ".webp": "image/webp",
+    ".woff2": "font/woff2",
+}
+
+_GENERIC_CONTENT_TYPES = (
+    "",
+    "application/octet-stream",
+    "binary/octet-stream",
+    "application/x-download",
+)
+
+
+def content_type_for_upload(response, *paths):
+    """MIME type to store on the GCS object.
+
+    upload_from_string defaults to text/plain, which breaks image, video, and
+    raw previews. Prefer the origin Content-Type, then the file extension.
+    """
+    header = (response.headers.get("Content-Type") or "").strip()
+    media_type = header.split(";", 1)[0].strip()
+    if media_type.lower() not in _GENERIC_CONTENT_TYPES:
+        return header
+
+    for path in paths:
+        guessed = _guess_content_type(path)
+        if guessed:
+            return guessed
+
+    return media_type or "application/octet-stream"
+
+
+def _guess_content_type(path):
+    if not path:
+        return None
+    clean = path.split("?", 1)[0].split("#", 1)[0]
+    guessed, _encoding = mimetypes.guess_type(clean)
+    if guessed:
+        return guessed
+    extension = os.path.splitext(clean)[1].lower()
+    return _EXTRA_CONTENT_TYPES.get(extension)
+
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in ("true", "1", "yes", "y", "t"):
+        return True
+    if normalized in ("false", "0", "no", "n", "f"):
+        return False
+    raise argparse.ArgumentTypeError(
+        "expected a boolean (true/false), got {!r}".format(value)
+    )
 
 def set_cloudinary_config(cloud_name, api_key, api_secret):
     try:
@@ -69,7 +130,8 @@ def migrate_cloudinary_resources(resource_types, gcs):
 
                             confirm = input("Please check your input data once and confirm : [yes]")
                             if confirm.lower() != 'yes':
-                                break
+                                print("Migration cancelled.")
+                                return
                             print("\n")
 
                         print("Migrating batch {} ...".format(batch_index))
@@ -165,7 +227,8 @@ def migrate_data(data, gcs_client, gcs_bucket_name, session):
         return True, data
 
     try:
-        blob.upload_from_string(res.content)
+        content_type = content_type_for_upload(res, source, target)
+        blob.upload_from_string(res.content, content_type=content_type)
     except Exception as put_err:
         return True, data
     return False, data
@@ -247,7 +310,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--keep_cloud_name_in_path",
-        type=bool,
+        type=parse_bool,
         default=False,
         help="When kept this argument True it script will create target structure with 'cloud_name/:resource_type/upload' \
             otherwise (default case) target structure will be same as you can see in your cloudinary Media Library.",
@@ -268,7 +331,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--resuming_migration",
-        type=bool,
+        type=parse_bool,
         default=False,
         help="When kept this argument true it will skip the object already migrated to GCS.",
     )
